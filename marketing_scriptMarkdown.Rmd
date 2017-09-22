@@ -1,0 +1,288 @@
+---
+title: "Scenario 3 (Programming)"
+author: "Seema Rani Kanuri"
+date: "August 10, 2017"
+output: html_document
+---
+
+#  Load libraries 
+```{r setup, include=FALSE}
+library('ggplot2') # visualization
+library('ggthemes') # visualization
+library('scales') # visualization
+library('dplyr') # data manipulation
+library('mice') # imputation
+library('randomForest') # classification algorithm
+library(data.table) # data manipulation
+
+# For modeling and predictions
+library(caret)
+library(glmnet)
+library(ranger)
+library(e1071)
+
+```
+
+
+# Importing Data
+```{r cars}
+dt_marketing <- fread('C:/Users/amber/Downloads/marketing.csv')
+
+```
+
+
+# Let explore teh dataset
+```{r}
+#print the structure of the dataframe
+head(dt_marketing)
+any(is.na(dt_marketing))
+```
+
+
+
+# Question 1: separate the data into a training set consisting of only instances where the month is May and a test set of the remaining instances
+
+```{r pressure, echo=FALSE}
+train <- subset(dt_marketing, month == "may")
+test <- subset(dt_marketing, month !="may")
+
+```
+
+
+# Data Processing
+```{r}
+
+unique(train$poutcome)
+unique(train$previous)
+unique(train$pdays)
+unique(train$contact)
+
+```
+```{r}
+#Dropping the below columns since they contain only one value (constant)
+train_df <- subset( train, select = -c(poutcome, previous,pdays,contact ) )
+
+#Replacing all unknown value with NA
+train_df[train_df== "unknown"]<- NA
+```
+
+
+# Converting into factor variables
+```{r}
+
+train_df[(which(is.na(train_df$job))) , 1]
+train_df[(which(is.na(train_df$education))) , 1]
+
+train_df$job <- as.factor(train_df$job)
+train_df$marital <- as.factor(train_df$marital)
+train_df$education <- as.factor(train_df$education)
+train_df$housing <- as.factor(train_df$housing)
+train_df$openAccount <- as.factor(train_df$openAccount)
+train_df$default <- as.factor(train_df$default)
+train_df$loan <- as.factor(train_df$loan)
+
+```
+
+
+# Missing Data
+
+```{r}
+#columns names with NA value
+print ( "columns names with NA value")
+colnames(train_df)[colSums(is.na(train_df)) > 0]
+
+
+#count of NA values
+print ( "Missing Data : NA count in education")
+sum(is.na(train_df$education))
+print ( "Missing Data : NA count in job")
+sum(is.na(train_df$job))
+```
+
+# As seen, 22 customerID have no job listed. so it may be easiest to try to predict the job' education based on other known information
+
+```{r}
+
+predicted_job <- train(
+  job ~ age + marital + balance + housing + loan,
+  tuneGrid = data.frame(mtry = c(2, 3, 5)),
+  data = train_df[!is.na(train_df$job), ],
+  method = "ranger",
+  trControl = trainControl(
+    method = "cv", number = 10,
+    repeats = 10, verboseIter = TRUE),
+  importance = 'impurity'
+)
+
+plot(predicted_job)
+summary(predicted_job)
+
+# Creating a Variable Importance variable
+vimp <- varImp(predicted_job)
+
+# Plotting "vimp"
+ggplot(vimp, 
+       top = dim(vimp$importance)[1]
+)
+train_df$job[is.na(train_df$job)] <- predict(predicted_job, train_df[is.na(train_df$job),])
+# Check the summary to make sure there are no more NA values
+summary(train_df$job)
+
+
+```
+
+# As seen, 376 customerID have no education listed. so it may be easiest to try to predict the passengers' education based on other known information.
+
+
+```{r}
+
+predicted_education <- train(
+  education ~ age + marital + balance + housing + loan,
+  tuneGrid = data.frame(mtry = c(2, 3, 5)),
+  data = train_df[!is.na(train_df$education), ],
+  method = "ranger",
+  trControl = trainControl(
+    method = "cv", number = 10,
+    repeats = 10, verboseIter = TRUE),
+  importance = 'impurity'
+)
+
+plot(predicted_education)
+summary(predicted_education)
+
+# Creating a Variable Importance variable
+vimp <- varImp(predicted_education)
+
+# Plotting "vimp"
+ggplot(vimp, 
+       top = dim(vimp$importance)[1]
+)
+train_df$education[is.na(train_df$education)] <- predict(predicted_education, train_df[is.na(train_df$education),])
+
+# Check the summary to make sure there are no more NA values
+summary(train_df$education)
+
+any(is.na(train_df))
+
+
+```
+
+
+# Question 2: split the May training set into a smaller training set based on day <= 15 and a validation set where day >= 16
+
+# Creating test , yrain, and validation data
+```{r}
+#train and validation data
+train_df1 <- subset( train_df, select = -c(month ) )
+sample_train <- subset(train_df1, day <= 15)
+sample_validation <- subset(train_df1, day >= 16)
+
+
+```
+
+# Question 3 : train a model on the training set
+
+
+#  Model a : Modeling with Random Forest 
+
+```{r}
+
+# random forest
+library('randomForest')
+set.seed(123)
+rf_model_train <- randomForest(openAccount ~ age + job + marital + education + default + loan + day + duration + campaign +
+                           balance + housing, data = sample_train)
+```
+
+# Fitting the Random Forest  model
+```{r}
+# prediction 
+rf_model_train.fitted = predict(rf_model_train)
+ans_rf_train = rep(NA,3653)
+for(i in 1:3653){
+  ans_rf_train[i] = as.integer(rf_model_train.fitted[[i]]) - 1
+}
+
+#Confusion Matrix
+table(ans_rf_train)
+
+```
+```{r}
+print ( "    Confusion Matrix ")
+print(rf_model_train)
+mean(ans_rf_train == sample_train$openAccount)
+```
+
+# Question 4 : make predictions on the validation set, making sure to include the customerID with the prediction for openAccount), and finally,
+
+
+# Making prediction useing the Random Forest model
+```{r}
+
+prediction_rf <- predict(rf_model_train, sample_validation)
+
+```
+
+
+#Prediction
+
+```{r}
+solution_rf <- data.frame(openAccount_mypred = prediction_rf, customerID = sample_validation$customerID)
+head(solution_rf)
+
+```
+
+# Question 5 : compare predictions made on validation set to instances within June and July based on customerID to see how many predicted as "yes" became "yes" in June and July (if any).  
+
+
+# Model Evaluation : 
+
+```{r}
+df_rf <- left_join(test, solution_rf, by = "customerID")
+new_df_rf <- subset( df_rf, select = c(customerID,openAccount_mypred,openAccount) )
+outcome_rf <- subset(new_df_rf, openAccount_mypred!="NA")
+
+# Résult
+print ( "Model Evaluation , confusion matrioutcome_rf")
+table(outcome_rf$openAccount, outcome_rf$openAccount_mypred
+      )
+```
+
+
+# Model  b: Logistic Regression
+
+```{r}
+# logistic regression
+set.seed(123)
+logit_model_train <- glm(openAccount ~ age + job + marital + education + default + loan + day + duration + campaign +
+                           balance + housing, data = sample_train ,family = binomial)
+# predicted result of regression
+ans_logit = rep(NA,3653)
+for(i in 1:3653){
+  ans_logit[i] = round(logit_model_train$fitted.values[[i]],0)
+}
+# check result
+mean(ans_logit == sample_train$openAccount)
+table(ans_logit)
+```
+# Model Evaluation and prediction using the Logit Model
+
+```{r}
+prediction_logit_1 <- predict(logit_model_train, sample_validation)
+prediction_logit <- ifelse(prediction_logit_1 > 0.5,1,0)
+
+solution_logit <- data.frame(openAccount_mypred = prediction_logit, customerID = sample_validation$customerID)
+solution_logit$openAccount_mypred[solution_logit$openAccount_mypred == 0] <- "no"
+
+solution_logit$openAccount_mypred[solution_logit$openAccount_mypred == 1] <- "yes"
+
+df_logit <- left_join(test, solution_logit, by = "customerID")
+df_logit_df <- subset( df_logit, select = c(customerID,openAccount_mypred,openAccount) )
+output_logit <- subset(df_logit_df, openAccount_mypred!="NA")
+print ( "Model Evaluation , confusion matrix")
+table(output_logit$openAccount, output_logit$openAccount_mypred      )
+
+```
+
+
+
